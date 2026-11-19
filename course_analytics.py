@@ -12,34 +12,13 @@ DEFS = r"""
 """
 
 
-def M(id, title, theory, tasks):
+def M(id, title, tasks):
     for t in tasks:
         t['db'] = 'market'
-    return dict(id=id, title=title, theory=theory, tasks=tasks)
+    return dict(id=id, title=title, tasks=tasks)
 
 
-M11 = M('m11', '11. Даты и время для аналитика', r"""
-# Даты и время
-
-Почти любой продуктовый отчёт — это группировка по времени.
-
-| Задача | PostgreSQL | В тренажёре |
-|---|---|---|
-| начало месяца/недели | `date_trunc('month', t)` | `date_trunc('month', t)` (добавлена) |
-| часть даты | `EXTRACT(dow FROM t)` | `date_part('dow', t)`, `date_part('hour', t)` |
-| день без времени | `t::date` | `date(t)` |
-| сдвиг | `t + interval '7 days'` | `date(t, '+7 day')`, `datetime(t, '-1 month')` |
-| разница в днях | `b::date - a::date` | `julianday(b) - julianday(a)` |
-| формат | `to_char(t, 'YYYY-MM')` | `strftime('%Y-%m', t)` или `substr(t, 1, 7)` |
-
-`date_part('dow')`: 0 — воскресенье … 6 — суббота (как в PostgreSQL); `'isodow'`: 1 — понедельник … 7 — воскресенье. Неделя в `date_trunc('week')` начинается с понедельника.
-
-## Типичные ошибки
-
-- `BETWEEN '2025-12-01' AND '2025-12-31'` для **timestamp** потеряет весь день 31-го после 00:00. Надёжнее полуинтервал: `t >= '2025-12-01' AND t < '2026-01-01'`.
-- Часовые пояса: в PostgreSQL храните `timestamptz`, а для отчёта приводите к нужной зоне `t AT TIME ZONE 'Europe/Moscow'`.
-- Медиана устойчивее среднего к выбросам — для «сколько дней до первой покупки» смотрите обе.
-""" + DEFS, [
+M11 = M('m11', '11. Даты и время для аналитика', [
     T('m11.1', 'Заказы по дням недели', "Число заказов по дню недели: dow (1 — понедельник … 7 — воскресенье), orders. По dow.",
       "SELECT date_part('isodow', created_at) AS dow, COUNT(*) AS orders FROM orders GROUP BY dow ORDER BY dow;", ordered=True),
     T('m11.2', 'Заказы по часам', "Число заказов по часу оформления: hour (0–23), orders. По hour.",
@@ -80,36 +59,7 @@ FROM users GROUP BY age_group;"""),
 FROM events WHERE user_id BETWEEN 1 AND 10 GROUP BY user_id ORDER BY user_id;""", ordered=True),
 ])
 
-M12 = M('m12', '12. Продуктовые и денежные метрики', r"""
-# Метрики, которые спросят на собеседовании
-
-## Активность
-- **DAU / WAU / MAU** — уникальные активные пользователи за день / неделю / месяц. Всегда `COUNT(DISTINCT user_id)`.
-- **Stickiness** = средний DAU / MAU — какую долю месяца «средний» пользователь заходит.
-- **New vs returning** — впервые ли пользователь сделал действие в этом периоде.
-
-## Деньги
-- **GMV** — оборот всех заказов (часто до вычета отмен/возвратов); **выручка** — то, что реально получено (у нас — delivered).
-- **AOV** (средний чек) = выручка / число заказов.
-- **ARPU** = выручка / все активные пользователи; **ARPPU** = выручка / платящие.
-- **Paying share (конверсия в оплату)** = платящие / активные.
-- **Gross profit** = выручка − себестоимость; **маржинальность** = gross profit / выручка.
-- **CAC** = затраты на канал / привлечённые пользователи; **ROMI** = (прибыль − затраты) / затраты.
-
-## Приёмы
-```sql
--- метрика по периодам, считаем чек заказа ДО усреднения
-WITH t AS (
-    SELECT o.order_id, substr(o.created_at, 1, 7) AS month, SUM(oi.quantity * oi.price) AS total
-    FROM orders o JOIN order_items oi ON oi.order_id = o.order_id
-    WHERE o.status = 'delivered'
-    GROUP BY o.order_id, month
-)
-SELECT month, COUNT(*) AS orders, SUM(total) AS revenue, round(AVG(total), 2) AS aov
-FROM t GROUP BY month ORDER BY month;
-```
-Главная ошибка — усреднить по позициям вместо заказов или посчитать DAU без DISTINCT.
-""" + DEFS, [
+M12 = M('m12', '12. Продуктовые и денежные метрики', [
     T('m12.1', 'DAU', "DAU за декабрь 2025: day, dau. По дню.",
       "SELECT date(event_time) AS day, COUNT(DISTINCT user_id) AS dau FROM events WHERE event_time >= '2025-12-01' GROUP BY day ORDER BY day;", ordered=True),
     T('m12.2', 'Stickiness', "Для декабря 2025: средний DAU (округлить до 1), MAU и stickiness в % (средний DAU / MAU × 100, округлить до 2).",
@@ -174,30 +124,7 @@ SELECT s.channel, gp.gross_profit, s.spend, round(100.0 * (gp.gross_profit - s.s
 FROM s JOIN gp ON gp.channel = s.channel ORDER BY romi_pct DESC;""", ordered=True, level=3),
 ])
 
-M13 = M('m13', '13. Воронки и конверсии', r"""
-# Воронки
-
-Воронка — последовательность шагов, на каждом часть пользователей отваливается. В market: `app_open → view_item → add_to_cart → begin_checkout → purchase`.
-
-## Два вида воронок
-
-1. **Простая (нестрогая)**: сколько уникальных пользователей сделали каждый шаг за период. Быстро, но не гарантирует порядок.
-2. **Строгая**: шаг засчитывается, только если он был **после** предыдущего (и, например, в тот же день/сессию). Честнее, но сложнее.
-
-```sql
-SELECT event_name, COUNT(DISTINCT user_id) AS users
-FROM events
-GROUP BY event_name
-ORDER BY CASE event_name WHEN 'app_open' THEN 1 WHEN 'view_item' THEN 2
-                         WHEN 'add_to_cart' THEN 3 WHEN 'begin_checkout' THEN 4 ELSE 5 END;
-```
-
-Конверсия шага: к предыдущему — `users / LAG(users) OVER (ORDER BY step)`, к началу — `users / FIRST_VALUE(users) OVER (ORDER BY step)`.
-
-Строгую воронку удобно строить через «время первого шага» и коррелированные подзапросы `MIN(event_time) ... WHERE event_time >= предыдущий_шаг`, либо через `LEAD` в окне по событиям пользователя.
-
-Разрезы воронки (устройство, канал, когорта, группа A/B) показывают, где именно теряются люди — это и есть продуктовый инсайт.
-""" + DEFS, [
+M13 = M('m13', '13. Воронки и конверсии', [
     T('m13.1', 'Простая воронка', "Уникальные пользователи на каждом шаге за весь 2025 год: step (event_name), users. В порядке шагов воронки.",
       """SELECT event_name AS step, COUNT(DISTINCT user_id) AS users FROM events GROUP BY event_name
 ORDER BY CASE event_name WHEN 'app_open' THEN 1 WHEN 'view_item' THEN 2 WHEN 'add_to_cart' THEN 3 WHEN 'begin_checkout' THEN 4 ELSE 5 END;""",
@@ -252,41 +179,7 @@ conversion_pct (округлить до 1). По убыванию conversion_pct
 FROM users u GROUP BY u.channel ORDER BY conversion_pct DESC;""", ordered=True, level=2),
 ])
 
-M14 = M('m14', '14. Когорты, retention, LTV', r"""
-# Когортный анализ
-
-**Когорта** — пользователи, объединённые моментом старта (обычно месяц регистрации). Сравнивая когорты, видим, улучшается ли продукт.
-
-## Retention
-
-- **Classic (N-day) retention**: доля когорты, активной **ровно в день N** после регистрации (D1, D7, D30).
-- **Monthly retention**: доля когорты, активной в месяце k после регистрации (M1, M2, …).
-- **Rolling retention**: доля, активная в день N **или позже** — 1 − rolling retention = отток.
-
-Учитывайте **зрелость когорты**: у декабрьской когорты ещё нет D30 — её нельзя сравнивать «в лоб».
-
-## Каркас запроса
-
-```sql
-WITH activity AS (SELECT DISTINCT user_id, substr(event_time, 1, 7) AS m FROM events),
-     cohort   AS (SELECT user_id, substr(signup_date, 1, 7) AS cohort FROM users),
-     x AS (
-        SELECT c.cohort, a.user_id,
-               (CAST(substr(a.m, 1, 4) AS INTEGER) * 12 + CAST(substr(a.m, 6, 2) AS INTEGER))
-             - (CAST(substr(c.cohort, 1, 4) AS INTEGER) * 12 + CAST(substr(c.cohort, 6, 2) AS INTEGER)) AS month_offset
-        FROM activity a JOIN cohort c USING (user_id)
-     )
-SELECT cohort, month_offset, COUNT(DISTINCT user_id) FROM x GROUP BY cohort, month_offset;
-```
-В PostgreSQL номер месяца удобнее: `EXTRACT(YEAR FROM age(m, cohort)) * 12 + EXTRACT(MONTH FROM age(m, cohort))`.
-
-**Пивот** (когорты строками, месяцы столбцами) — условная агрегация `COUNT(DISTINCT CASE WHEN month_offset = 1 THEN user_id END)`.
-
-## Деньги во времени
-
-- **LTV** — выручка на пользователя когорты за период жизни (LTV30, LTV90…). Сравнивают с CAC: LTV/CAC > 3 — здоровая экономика.
-- **MRR** (подписки) — сумма месячных платежей активных подписок на дату; **churn rate** — доля подписок, закончившихся за месяц.
-""" + DEFS, [
+M14 = M('m14', '14. Когорты, retention, LTV', [
     T('m14.1', 'Размер когорт', "Размер когорт по месяцу регистрации: cohort_month ('2025-01'), users. По месяцу.",
       "SELECT substr(signup_date, 1, 7) AS cohort_month, COUNT(*) AS users FROM users GROUP BY cohort_month ORDER BY cohort_month;", ordered=True),
     T('m14.2', 'D1 / D7 / D30', """
@@ -352,43 +245,7 @@ GROUP BY e.month_end ORDER BY e.month_end;""", ordered=True, level=3,
       hints=["Ряд месяцев — рекурсивный CTE; конец месяца: date(ms, '+1 month', '-1 day')"]),
 ])
 
-M15 = M('m15', '15. Продвинутые паттерны аналитика', r"""
-# Паттерны, которые решают 80% задач
-
-## Дедупликация
-`ROW_NUMBER() OVER (PARTITION BY ключ ORDER BY created_at) = 1` — оставить первую запись по ключу. Ключ нормализуем: `lower(trim(email))`.
-
-## A/B-тесты
-1. Пользователь учитывается в группе с момента назначения (`assigned_at`).
-2. Метрики считаются **на пользователя** группы (конверсия, ARPU), знаменатель — все назначенные.
-3. Значимость конверсии — z-тест для двух долей:
-```
-p_pool = (x_A + x_B) / (n_A + n_B)
-z = (p_B − p_A) / sqrt(p_pool · (1 − p_pool) · (1/n_A + 1/n_B))
-```
-|z| > 1.96 ≈ значимо на уровне 5%. Для денег (ARPU) нужен t-тест/бутстрап — обычно уже в Python.
-
-## Сессии
-Новая сессия начинается, если пауза с предыдущим событием больше 30 минут: `LAG(event_time)` → флаг начала → накопительная `SUM(флаг)` = номер сессии.
-
-## Gaps & islands (серии)
-Для подряд идущих дней `день − ROW_NUMBER()` постоянен внутри серии — по нему и группируем.
-
-## Парето / ABC
-Накопительная доля выручки по товарам от больших к малым: A — до 80%, B — до 95%, C — остальное.
-
-## RFM
-Recency (давность последней покупки), Frequency (число заказов), Monetary (сумма) → `NTILE(3)` по каждому → сегмент «333» = лучшие клиенты.
-
-## Перцентили
-PostgreSQL: `percentile_cont(0.9) WITHIN GROUP (ORDER BY total)`. В тренажёре: `percentile_cont(total, 0.9)` и `median(total)`.
-
-## Пивот
-`SUM(CASE WHEN device = 'ios' THEN x ELSE 0 END) AS ios` или `SUM(x) FILTER (WHERE device = 'ios')`.
-
-## Корзинный анализ
-Самосоединение позиций заказа `a.order_id = b.order_id AND a.product_id < b.product_id` даёт пары товаров.
-""" + DEFS, [
+M15 = M('m15', '15. Продвинутые паттерны аналитика', [
     T('m15.1', 'Дедупликация', """
 В `raw_signups` оставьте по одной (самой ранней по created_at) записи на нормализованный email (lower + trim).
 Столбцы: email_norm, full_name, created_at. По created_at.
@@ -494,17 +351,7 @@ FROM f GROUP BY month ORDER BY month;""", ordered=True, level=2,
       hints=['Накопительный COUNT(DISTINCT) по окну не работает — считайте по месяцу первой покупки и суммируйте']),
 ])
 
-M16 = M('m16', '16. Задачи с собеседований', r"""
-# Как решать задачи на собеседовании
-
-1. **Уточни определения**: что такое «активный», какой статус заказа считать, включительно ли границы дат, как делить ничьи.
-2. **Посмотри на гранулярность**: одна строка = что? (заказ, позиция, событие). Большинство ошибок — агрегат не на том уровне.
-3. **Собирай по шагам через CTE** и проверяй промежуточный результат (`SELECT * FROM step LIMIT 10`).
-4. **Проверь крайние случаи**: NULL, пользователи без заказов (LEFT JOIN), дубли после JOIN, ничьи в ORDER BY, целочисленное деление.
-5. **Проговаривай сложность**: какие индексы помогут, где полный проход.
-
-Классика: N-й по величине, топ-N в группе, пользователи «каждый месяц», разрывы между событиями, дубли, сравнение периодов, накопительные итоги.
-""" + DEFS, [
+M16 = M('m16', '16. Задачи с собеседований', [
     T('m16.1', 'Второй по величине заказ', "Сумма второго по величине заказа (по сумме позиций, любой статус). Одно число.",
       """WITH t AS (SELECT order_id, SUM(quantity * price) AS total FROM order_items GROUP BY order_id)
 SELECT MAX(total) AS second_max FROM t WHERE total < (SELECT MAX(total) FROM t);""", level=2,

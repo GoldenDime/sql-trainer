@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import sys
+import textwrap
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
@@ -20,6 +21,7 @@ if sys.platform == 'win32':
 
 import course
 import engine
+import theory
 from progress import Progress
 
 APP_TITLE = 'SQL-тренажёр'
@@ -38,6 +40,29 @@ row_number rank dense_rank ntile lag lead first_value last_value nth_value cume_
 strftime date_trunc date_part greatest least split_part median percentile_cont stddev variance corr string_agg group_concat
 abs sqrt power ln exp floor ceil json_extract json_each json_set json_object json_array printf concat iif typeof
 '''.split()))
+
+def split_md_row(line):
+    """Делит строку markdown-таблицы на ячейки; | внутри `кода` не считается разделителем."""
+    cells, cur, in_code = [], [], False
+    body = line.strip()
+    if body.startswith('|'):
+        body = body[1:]
+    if body.endswith('|') and not body.endswith('\\|'):
+        body = body[:-1]
+    for ch in body:
+        if ch == '`':
+            in_code = not in_code
+        if ch == '|' and not in_code:
+            cells.append(''.join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    cells.append(''.join(cur).strip())
+    return cells
+
+
+SANDBOX_DEFAULT = {'shop': 'SELECT * FROM product;', 'market': 'SELECT * FROM users LIMIT 20;',
+                   'uni': 'SELECT * FROM students;'}
 
 C = {
     'bg': '#f6f7f9', 'panel': '#ffffff', 'accent': '#2f6fde', 'ok': '#1e8e3e', 'bad': '#c5221f', 'warn': '#b06000',
@@ -188,6 +213,7 @@ class App(tk.Tk):
         dsb.pack(side='right', fill='y')
         self._desc_tags(self.desc)
         self.desc.bind('<1>', lambda e: self.desc.focus_set())
+        self.desc.bind('<Configure>', self._on_desc_resize)
         self.desc.configure(state='disabled')
         right.add(dframe, weight=2)
 
@@ -266,11 +292,21 @@ class App(tk.Tk):
         t.tag_configure('code', font=self.f_mono_s, background=C['code_bg'])
         t.tag_configure('block', font=self.f_mono_s, background=C['code_bg'], lmargin1=14, lmargin2=14, spacing1=0, spacing3=0)
         t.tag_configure('table', font=self.f_mono_s, lmargin1=8, lmargin2=8, spacing1=0, spacing3=0)
+        t.tag_configure('table_b', font=tkfont.Font(family=self.f_mono_s.cget('family'), size=10, weight='bold'),
+                        lmargin1=8, lmargin2=8, spacing1=0, spacing3=0)
+        t.tag_configure('table_rule', font=self.f_mono_s, foreground='#c9ced6', lmargin1=8, spacing1=0, spacing3=0)
         t.tag_configure('bullet', lmargin1=12, lmargin2=28)
         t.tag_configure('muted', foreground=C['muted'])
         t.tag_configure('ok', foreground=C['ok'], font=self.f_text_b)
         t.tag_configure('warn', foreground=C['warn'])
         t.tag_configure('hint', background='#fff7e0', lmargin1=10, lmargin2=10)
+        t.tag_configure('block_pg', font=self.f_mono_s, background='#eef4ff', lmargin1=14, lmargin2=14, spacing1=0, spacing3=0)
+        t.tag_configure('block_bad', font=self.f_mono_s, background='#fdeeee', lmargin1=14, lmargin2=14, spacing1=0, spacing3=0)
+        t.tag_configure('lbl', font=self.f_ui, foreground=C['muted'], lmargin1=14, spacing1=8, spacing3=1)
+        t.tag_configure('lbl_pg', font=self.f_ui, foreground='#3559a8', lmargin1=14, spacing1=8, spacing3=1)
+        t.tag_configure('lbl_bad', font=self.f_ui_b, foreground=C['bad'], lmargin1=14, spacing1=8, spacing3=1)
+        t.tag_configure('link', font=self.f_ui_b, foreground=C['accent'], underline=True)
+        t.tag_configure('footer', spacing1=18)
 
     def _make_grid(self, parent):
         frame = ttk.Frame(parent)
@@ -430,6 +466,8 @@ class App(tk.Tk):
     def refresh_tree(self):
         self._due = set(self.progress.due_reviews(course.ORDER))
         opened = {iid for iid in self.nav.get_children('') if self.nav.item(iid, 'open')}
+        opened_th = {iid + ':theory' for iid in self.nav.get_children('')
+                     if self.nav.exists(iid + ':theory') and self.nav.item(iid + ':theory', 'open')}
         sel = self.nav.selection()
         self.nav.delete(*self.nav.get_children(''))
         for m in course.MODULES:
@@ -437,7 +475,12 @@ class App(tk.Tk):
             done = self.progress.solved_count(ids)
             self.nav.insert('', 'end', iid=m['id'], text=f'{m["title"]}   {done}/{len(ids)}', open=m['id'] in opened,
                             tags=('module', 'solved') if done == len(ids) else ('module',))
-            self.nav.insert(m['id'], 'end', iid=m['id'] + ':theory', text='§  Теория', tags=('theory',))
+            pages = theory.pages(m['id'])
+            th = m['id'] + ':theory'
+            self.nav.insert(m['id'], 'end', iid=th, text=f'§  Теория · {len(pages)} стр.', tags=('theory',),
+                            open=th in opened_th)
+            for k, (ptitle, _md) in enumerate(pages):
+                self.nav.insert(th, 'end', iid=f'{th}:{k}', text=f'{k + 1}. {ptitle}', tags=('theory',))
             for t in m['tasks']:
                 label, tag = self.task_label(t)
                 self.nav.insert(m['id'], 'end', iid=t['id'], text=label, tags=(tag,) if tag else ())
@@ -458,8 +501,9 @@ class App(tk.Tk):
     def _select_silently(self, iid):
         self._suppress_nav = True
         parent = self.nav.parent(iid)
-        if parent:
+        while parent:
             self.nav.item(parent, open=True)
+            parent = self.nav.parent(parent)
         self.nav.selection_set(iid)
         self.nav.see(iid)
         self.after(10, lambda: setattr(self, '_suppress_nav', False))
@@ -473,8 +517,11 @@ class App(tk.Tk):
         iid = sel[0]
         if iid in course.TASKS:
             self.open_task(iid, select=False)
-        elif iid.endswith(':theory'):
-            self.open_theory(iid.split(':')[0], select=False)
+        elif ':theory' in iid:
+            parts = iid.split(':')
+            if len(parts) == 2:
+                self.nav.item(iid, open=True)
+            self.open_theory(parts[0], int(parts[2]) if len(parts) > 2 else 0, select=False)
         else:
             self.nav.item(iid, open=True)
             self.open_theory(iid, select=False)
@@ -516,23 +563,70 @@ class App(tk.Tk):
             self.right.sashpos(0, int(h * desc_share))
             self.right.sashpos(1, int(h * (desc_share + (1 - desc_share) * 0.45)))
 
-    def open_theory(self, mid, select=True):
+    def open_theory(self, mid, page=0, select=True):
         self._save_current_sql()
         m = next(x for x in course.MODULES if x['id'] == mid)
+        pages = theory.pages(mid)
+        page = max(0, min(page, len(pages) - 1))
+        was_theory = self.mode == 'theory'
         self.mode, self.current = 'theory', mid
         self.progress.mark_theory(mid)
-        self.render_desc(m['theory'])
+        title, md = pages[page]
+        head = f'_{m["title"]}  ·  теория, страница {page + 1} из {len(pages)}_'
+
+        def show():
+            self.render_desc(head + '\n' + md.strip('\n'), runnable=True)
+            self._theory_footer(m, pages, page)
+        show()
+        self._rerender = show
         self._set_task_buttons(False)
-        db = 'market' if mid >= 'm11' else self.sandbox_db
-        self.switch_sandbox_db(db, load_text=True)
-        self.lbl_db.configure(text='песочница')
+        if not was_theory or self.sandbox_db != 'uni':
+            self.switch_sandbox_db('uni', load_text=True)
+        self.lbl_db.configure(text='примеры: база uni')
         if select:
-            self._select_silently(mid + ':theory')
-        self.after(30, lambda: self._sash(0.55))
+            self._select_silently(f'{mid}:theory:{page}')
+        if not was_theory:
+            self.after(30, lambda: self._sash(0.58))
+
+    def _theory_footer(self, m, pages, page):
+        t = self.desc
+        t.configure(state='normal')
+        t.insert('end', '\n', 'footer')
+        if page > 0:
+            self._link(t, f'← {pages[page - 1][0]}', lambda: self.open_theory(m['id'], page - 1))
+            t.insert('end', '      ')
+        if page + 1 < len(pages):
+            self._link(t, f'{pages[page + 1][0]} →', lambda: self.open_theory(m['id'], page + 1))
+        elif m['tasks']:
+            first = next((x['id'] for x in m['tasks'] if self.progress.status(x['id']) != 'solved'), m['tasks'][0]['id'])
+            self._link(t, 'К заданиям модуля →', lambda: self.open_task(first))
+        t.insert('end', '\n')
+        t.configure(state='disabled')
+
+    def _link(self, t, text, callback):
+        self._link_no = getattr(self, '_link_no', 0) + 1
+        tag = f'lnk{self._link_no}'
+        t.insert('end', text, ('link', tag))
+        t.tag_bind(tag, '<Button-1>', lambda _e: (callback(), 'break')[1])
+        t.tag_bind(tag, '<Enter>', lambda _e: t.configure(cursor='hand2'))
+        t.tag_bind(tag, '<Leave>', lambda _e: t.configure(cursor='arrow'))
+
+    def run_example(self, code):
+        if self.busy:
+            self.set_status('Дождитесь окончания предыдущего запроса.')
+            return
+        if self.sandbox_db != 'uni':
+            self.progress.data['sandbox'][self.sandbox_db] = self.editor_text()
+            self.sandbox_db = 'uni'
+            self.db_var.set('uni')
+        self.set_editor(code.strip('\n') + '\n')
+        self.nb.select(0)
+        self.run_current()
 
     def open_sandbox(self):
         self._save_current_sql()
         self.mode, self.current = 'sandbox', None
+        self._rerender = None
         self.render_desc("""# Песочница
 Свободный режим. Выберите базу справа от кнопок. Здесь можно делать что угодно: INSERT, UPDATE, CREATE TABLE —
 изменения живут, пока открыта программа, кнопка «Сбросить базу» возвращает исходные данные.
@@ -551,13 +645,13 @@ class App(tk.Tk):
         self.sandbox_db = db
         self.db_var.set(db)
         if load_text:
-            default = {'shop': 'SELECT * FROM product;', 'market': 'SELECT * FROM users LIMIT 20;'}[db]
+            default = SANDBOX_DEFAULT[db]
             self.set_editor(self.progress.data['sandbox'].get(db) or default)
 
     def on_sandbox_db(self, _e=None):
         self.progress.data['sandbox'][self.sandbox_db] = self.editor_text()
         self.sandbox_db = self.db_var.get()
-        default = {'shop': 'SELECT * FROM product;', 'market': 'SELECT * FROM users LIMIT 20;'}[self.sandbox_db]
+        default = SANDBOX_DEFAULT[self.sandbox_db]
         self.set_editor(self.progress.data['sandbox'].get(self.sandbox_db) or default)
 
     def reset_sandbox(self):
@@ -600,34 +694,38 @@ class App(tk.Tk):
         if t.get('kind') in ('dml', 'ddl'):
             lines += ['', '_Каждый запуск идёт на свежей копии базы. Проверка: ваш скрипт → проверочные вставки/запрос._']
         self.render_desc('\n'.join(lines))
+        self._rerender = lambda: self.render_task(t)
 
     # ------------------------------------------------------------ разметка
-    def render_desc(self, md):
+    def render_desc(self, md, runnable=False):
         t = self.desc
         t.configure(state='normal')
         t.delete('1.0', 'end')
+        for tag in t.tag_names():
+            if tag.startswith('lnk'):
+                t.tag_delete(tag)
         lines = md.strip('\n').split('\n')
-        i, in_code = 0, False
+        i, in_code, lang, buf = 0, False, '', []
         while i < len(lines):
             line = lines[i]
             if line.strip().startswith('```'):
-                in_code = not in_code
+                if not in_code:
+                    in_code, lang, buf = True, line.strip()[3:].strip().lower(), []
+                else:
+                    in_code = False
+                    self._code_block(t, lang, buf, runnable)
                 i += 1
                 continue
             if in_code:
-                t.insert('end', line + '\n', 'block')
+                buf.append(line)
             elif line.startswith('|'):
                 rows = []
                 while i < len(lines) and lines[i].startswith('|'):
-                    cells = [c.strip() for c in lines[i].strip().strip('|').split('|')]
+                    cells = split_md_row(lines[i])
                     if not all(re.fullmatch(r':?-{2,}:?', c) for c in cells if c):
                         rows.append([c.replace('`', '').replace('**', '') for c in cells])
                     i += 1
-                widths = [max(len(r[k]) if k < len(r) else 0 for r in rows) for k in range(max(len(r) for r in rows))]
-                for n, r in enumerate(rows):
-                    text = '  '.join((r[k] if k < len(r) else '').ljust(widths[k]) for k in range(len(widths)))
-                    t.insert('end', text.rstrip() + '\n', ('table', 'b') if n == 0 else 'table')
-                t.insert('end', '\n')
+                self._table(t, rows)
                 continue
             elif line.startswith('# '):
                 t.insert('end', line[2:] + '\n', 'h1')
@@ -643,8 +741,76 @@ class App(tk.Tk):
                 self._inline(t, line)
                 t.insert('end', '\n')
             i += 1
+        if in_code:
+            self._code_block(t, lang, buf, runnable)
         t.configure(state='disabled')
         t.yview_moveto(0)
+
+    def _table(self, t, rows):
+        ncol = max(len(r) for r in rows)
+        rows = [r + [''] * (ncol - len(r)) for r in rows]
+        cw = max(1, self.f_mono_s.measure('0'))
+        width = t.winfo_width()
+        if width < 200:
+            width = 900
+        avail = max(40, int((width - 2 * 16 - 40) / cw))
+        gap = 2
+        natural = [max(len(r[k]) for r in rows) for k in range(ncol)]
+        widths = list(natural)
+        if sum(natural) + gap * (ncol - 1) > avail:
+            room = avail - gap * (ncol - 1)
+            mins = [min(natural[k], max(8, min(18, max((len(w) for r in rows for w in r[k].split()), default=1))))
+                    for k in range(ncol)]
+            extra = max(0, room - sum(mins))
+            want = [natural[k] - mins[k] for k in range(ncol)]
+            total_want = sum(want) or 1
+            widths = [mins[k] + int(extra * want[k] / total_want) for k in range(ncol)]
+        wrapped = [[textwrap.wrap(r[k], widths[k], break_long_words=True, break_on_hyphens=False) or [''] for k in range(ncol)]
+                   for r in rows]
+        multi = any(len(c) > 1 for r in wrapped for c in r)
+        line_w = sum(widths) + gap * (ncol - 1)
+        for n, r in enumerate(wrapped):
+            height = max(len(c) for c in r)
+            for h in range(height):
+                text = (' ' * gap).join((r[k][h] if h < len(r[k]) else '').ljust(widths[k]) for k in range(ncol))
+                t.insert('end', text.rstrip() + '\n', 'table_b' if n == 0 else 'table')
+            if n == 0 or (multi and n + 1 < len(wrapped)):
+                t.insert('end', '─' * line_w + '\n', 'table_rule')
+        t.insert('end', '\n')
+
+    def _on_desc_resize(self, e):
+        w = e.width
+        if abs(w - getattr(self, '_desc_w', 0)) < 40:
+            return
+        self._desc_w = w
+        if getattr(self, '_resize_job', None):
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(250, self._rerender_desc)
+
+    def _rerender_desc(self):
+        self._resize_job = None
+        fn = getattr(self, '_rerender', None)
+        if fn:
+            pos = self.desc.yview()[0]
+            fn()
+            self.desc.yview_moveto(pos)
+
+    def _code_block(self, t, lang, buf, runnable):
+        code = '\n'.join(buf)
+        tag = 'block'
+        if lang in ('sql', 'sql-error') and runnable:
+            t.insert('end', '', 'lbl')
+            self._link(t, '▶ Выполнить пример', lambda c=code: self.run_example(c))
+            t.insert('end', '   на базе uni' + ('  ·  в конце будет ошибка — так задумано' if lang == 'sql-error' else '') + '\n',
+                     'lbl')
+        elif lang == 'pg':
+            t.insert('end', 'PostgreSQL  ·  во встроенном SQLite не выполнится\n', 'lbl_pg')
+            tag = 'block_pg'
+        elif lang == 'bad':
+            t.insert('end', '✗ Так не надо\n', 'lbl_bad')
+            tag = 'block_bad'
+        for ln in buf:
+            t.insert('end', ln + '\n', tag)
 
     def _inline(self, t, s, base=None):
         parts = re.split(r'(\*\*[^*]+\*\*|`[^`]+`)', s)
@@ -786,7 +952,14 @@ class App(tk.Tk):
             def fn():
                 conn = self.sandbox_conn(db)
                 self.worker_conn = conn
-                return ('run', engine.run_script(conn, sql))
+                res = engine.run_script(conn, sql)
+                if res.error and conn.in_transaction:
+                    try:
+                        conn.execute('ROLLBACK')
+                        res.messages.append('Транзакция не завершилась из-за ошибки — тренажёр откатил её (ROLLBACK).')
+                    except Exception:  # noqa: BLE001
+                        pass
+                return ('run', res)
         self._start('Выполняю…', fn)
 
     def show_run(self, res):
@@ -1041,6 +1214,7 @@ class App(tk.Tk):
         messagebox.showinfo(APP_TITLE, 'Горячие клавиши\n\n'
                             'F5 / Ctrl+Enter — выполнить\nF9 / Ctrl+Shift+Enter — проверить\n'
                             'Ctrl+/ — закомментировать строки\nTab / Shift+Tab — отступ\nCtrl+= / Ctrl+- — размер шрифта\n\n'
+                            'В теории «▶ Выполнить пример» переносит пример в редактор и выполняет на базе uni.\n'
                             'Если выполняются несколько операторов, показывается результат последнего SELECT.\n'
                             'Прогресс сохраняется автоматически в progress.json.')
 

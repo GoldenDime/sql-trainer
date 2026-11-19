@@ -412,8 +412,10 @@ def build_shop(conn):
     conn.commit()
 
 
-BUILDERS = {'shop': build_shop, 'market': build_market}
-DATA_VERSION = 3
+from demo_data import build_uni  # noqa: E402
+
+BUILDERS = {'shop': build_shop, 'market': build_market, 'uni': build_uni}
+DATA_VERSION = 4
 
 
 def build_file(name, path):

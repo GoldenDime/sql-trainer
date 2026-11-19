@@ -270,7 +270,8 @@ def install_functions(conn):
 
 # ---------- базы ----------
 
-DB_TITLES = {'shop': 'shop — магазин из лекций', 'market': 'market — маркетплейс 2025'}
+DB_TITLES = {'shop': 'shop — магазин из лекций', 'market': 'market — маркетплейс 2025',
+             'uni': 'uni — университет и онлайн-школа (примеры теории)'}
 
 
 _DB_LOCK = threading.Lock()
@@ -653,6 +654,10 @@ def export_postgres(name, path):
                     typ = PG_TYPES.get(c[2].upper(), 'text')
                     if t in ('product', 'products') and c[1] == 'attributes':
                         typ = 'jsonb'
+                    if t == 'courses' and c[1] == 'meta':
+                        typ = 'jsonb'
+                    if c[1].endswith('_on') or (t == 'library_visits' and c[1] == 'day'):
+                        typ = 'date'
                     if c[1].endswith('_at') or c[1] in ('event_time',):
                         typ = 'timestamp'
                     if c[1].endswith('_date') and t != 'raw_signups':

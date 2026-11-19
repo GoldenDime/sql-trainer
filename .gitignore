@@ -1,0 +1,5 @@
+cache/
+__pycache__/
+progress.json
+progress.json.*
+error.log

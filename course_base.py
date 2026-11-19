@@ -8,69 +8,13 @@ def T(id, title, text, solution, db='shop', ordered=False, hints=(), level=1, ki
                 lecture=lecture)
 
 
-M0 = dict(id='m00', title='0. Как устроен тренажёр', theory=r"""
-# Как устроен тренажёр
-
-Слева — модули. В каждом есть **теория** и **задания**. Решение пишется в редакторе, затем:
-
-- **F5 / Ctrl+Enter** — выполнить и посмотреть результат;
-- **F9 / Ctrl+Shift+Enter** — проверить решение;
-- «Подсказка» открывает подсказки по одной, «Решение» показывает эталон (задание тогда засчитывается без опыта);
-- вкладка «Ожидаемый результат» показывает, какая таблица должна получиться.
-
-Проверяется **результат**, а не текст запроса: совпадение строк и значений, имена столбцов не важны. Порядок строк проверяется, только если в условии сказано «отсортируйте». Числа сравниваются с точностью до 0.01.
-
-Прогресс, последние решения и опыт хранятся в файле `progress.json` рядом с программой. Решённые задания возвращаются в раздел «Повторение» через 2, 6, 15, 35 дней (интервальное повторение).
-
-## Две учебные базы
-
-- **shop** — магазин из лекций: category, product, customer, orders, order_item, newsletter_subscriber, courier, blocked_list, category_tree, employee, seller_monthly, price_audit.
-- **market** — маркетплейс за 2025 год: users (~2.6 тыс.), events (~180 тыс. событий приложения), orders, order_items, products, categories (дерево), ab_test, subscriptions, marketing_spend, raw_signups.
-
-Кнопка «Схема» показывает таблицы и столбцы текущей базы. «Песочница» — свободный режим, там можно менять данные (кнопка «Сбросить» вернёт исходное состояние).
-
-## Диалект: SQLite с добавками PostgreSQL
-
-Внутри работает встроенный SQLite (ничего ставить не надо). Синтаксис запросов почти совпадает с PostgreSQL: JOIN всех видов, CTE, WITH RECURSIVE, оконные функции, FILTER, RETURNING, ON CONFLICT. Добавлены функции как в PostgreSQL: `date_trunc`, `date_part`, `greatest`, `least`, `split_part`, `median`, `percentile_cont(x, p)`, `stddev`, `corr`, `string_agg`, `bool_and`, `bool_or`, а `lower/upper` понимают кириллицу.
-
-Отличия, которые надо помнить:
-
-- `x::int` → `CAST(x AS INTEGER)`; `5/2 = 2` (целочисленное деление, как в PostgreSQL) — пишите `5.0/2` или `CAST(x AS REAL)`;
-- даты хранятся текстом `'2025-12-31 18:00:00'`; интервалы: `date(d, '+7 day')`, `datetime(t, '-1 month')`; разница в днях — `julianday(b) - julianday(a)` (в PostgreSQL: `b::date - a::date`);
-- `ILIKE` нет — `lower(col) LIKE '%...%'`; `EXTRACT(dow FROM t)` → `date_part('dow', t)`;
-- логические значения — 1/0; JSON-оператор `->>` есть, но вместо `@>` и `?` — `json_extract`, `json_each`;
-- нет `generate_series` — ряд строим рекурсивным CTE.
-
-Кнопка «Экспорт в PostgreSQL» сохранит любую базу в .sql — её можно загрузить в твой локальный PostgreSQL 17 и решать те же задачи там.
-""", tasks=[
+M0 = dict(id='m00', title='0. Как устроен тренажёр', tasks=[
     T('m00.1', 'Первый запрос', """
 База **shop**. Выведите всех клиентов — все столбцы таблицы `customer`.
 """, "SELECT * FROM customer;", hints=['SELECT * FROM имя_таблицы;']),
 ])
 
-M1 = dict(id='m01', title='1. SELECT: выборка и сортировка', theory=r"""
-# SELECT: читаем строки и столбцы
-
-```
-SELECT столбцы / выражения AS алиас
-FROM таблица
-WHERE условие для каждой строки
-ORDER BY столбец [ASC|DESC], ...
-LIMIT n [OFFSET k];
-```
-
-**Логический порядок выполнения**: FROM → WHERE → SELECT → DISTINCT → ORDER BY → LIMIT. Поэтому алиас из SELECT нельзя использовать в WHERE, но можно в ORDER BY.
-
-- `SELECT *` удобно для разведки, в отчётах перечисляйте нужные столбцы.
-- Без ORDER BY порядок строк **не гарантирован**. Для стабильного TOP-N добавляйте второй ключ: `ORDER BY price DESC, product_id`.
-- `DISTINCT` убирает повторы сочетаний выбранных столбцов.
-- `BETWEEN a AND b` включает обе границы; `IN (1, 2, 3)` — проверка на вхождение в список.
-- Выражения в SELECT: `price * stock AS stock_value`, конкатенация строк `||`.
-
-## NULL
-
-NULL — «значение неизвестно», а не 0 и не пустая строка. `col = NULL` никогда не истинно; пишем `col IS NULL` / `IS NOT NULL`. Любая арифметика с NULL даёт NULL.
-""", tasks=[
+M1 = dict(id='m01', title='1. SELECT: выборка и сортировка', tasks=[
     T('m01.1', 'Названия и цены', "Выведите название и цену всех товаров (`product`).",
       "SELECT name, price FROM product;", lecture=4),
     T('m01.2', 'Дороже тысячи', "Товары дороже 1000: название и цену. Отсортируйте по возрастанию цены.",
@@ -99,35 +43,7 @@ NULL — «значение неизвестно», а не 0 и не пуста
       "SELECT name, price FROM product ORDER BY price LIMIT 2 OFFSET 2;", ordered=True),
 ])
 
-M2 = dict(id='m02', title='2. Выражения: CASE, COALESCE, строки', theory=r"""
-# Выражения, которые нужны каждый день
-
-## CASE — условная логика
-
-```sql
-SELECT name,
-       CASE WHEN stock = 0 THEN 'нет'
-            WHEN stock < 10 THEN 'мало'
-            ELSE 'много' END AS availability
-FROM product;
-```
-Ветки проверяются сверху вниз, срабатывает первая истинная. Без ELSE результат — NULL.
-
-## Работа с NULL
-
-- `COALESCE(a, b, c)` — первое не-NULL значение: `COALESCE(city, 'не указан')`.
-- `NULLIF(a, b)` — NULL, если a = b. Классика безопасного деления: `x / NULLIF(y, 0)`.
-
-## Строки
-
-- `||` — конкатенация (в PostgreSQL ещё `concat()`, она игнорирует NULL);
-- `lower`, `upper`, `trim`, `length`, `substr(s, start, len)`, `replace`, `instr(s, sub)` (в PostgreSQL — `strpos`), `split_part(s, '@', 2)`;
-- `LIKE 'Смартфон%'`: `%` — любая строка, `_` — один символ. В PostgreSQL для регистра есть `ILIKE`, здесь — `lower(col) LIKE ...`.
-
-## Числа и деление
-
-`7 / 2 = 3` — деление целых целочисленное (и в PostgreSQL тоже!). Для доли умножайте на `100.0` или приводите тип: `100.0 * part / total`. Округление — `round(x, 2)`.
-""", tasks=[
+M2 = dict(id='m02', title='2. Выражения: CASE, COALESCE, строки', tasks=[
     T('m02.1', 'CASE: наличие', """
 Для каждого товара выведите name и статус: 'нет', если stock = 0; 'мало', если stock < 10; иначе 'много'.
 """, "SELECT name, CASE WHEN stock = 0 THEN 'нет' WHEN stock < 10 THEN 'мало' ELSE 'много' END AS availability FROM product;"),
@@ -164,41 +80,7 @@ margin_pct = (price − cost) / price × 100, округлённая до 1 зн
       hints=["split_part(email, '@', 2) или substr(email, instr(email, '@') + 1)"]),
 ])
 
-M3 = dict(id='m03', title='3. Агрегаты, GROUP BY, HAVING', theory=r"""
-# Агрегаты: одна цифра вместо многих строк
-
-`COUNT`, `SUM`, `AVG`, `MIN`, `MAX` берут набор строк и возвращают одно значение.
-
-- `COUNT(*)` — число строк; `COUNT(col)` — непустых значений; `COUNT(DISTINCT col)` — уникальных непустых.
-- Агрегаты игнорируют NULL (кроме `COUNT(*)`). `AVG` от пустого набора — NULL.
-
-## GROUP BY
-
-Строки с одинаковыми значениями ключа собираются в группу, агрегаты считаются внутри группы, каждая группа даёт одну строку. В SELECT можно писать только ключи группировки и агрегаты.
-
-## WHERE vs HAVING
-
-```
-FROM → WHERE (отдельные строки) → GROUP BY → агрегаты → HAVING (группы) → SELECT → ORDER BY
-```
-```sql
-SELECT category_id, COUNT(*) AS products, SUM(stock) AS units
-FROM product
-WHERE stock > 0               -- до группировки
-GROUP BY category_id
-HAVING COUNT(*) >= 2          -- после группировки
-ORDER BY units DESC;
-```
-
-## Условная агрегация
-
-```sql
-SELECT COUNT(*) FILTER (WHERE status = 'PAID')       AS paid,      -- PostgreSQL и SQLite
-       SUM(CASE WHEN status = 'NEW' THEN 1 ELSE 0 END) AS new_orders -- работает везде
-FROM orders;
-```
-Это главный инструмент аналитика для сводных таблиц.
-""", tasks=[
+M3 = dict(id='m03', title='3. Агрегаты, GROUP BY, HAVING', tasks=[
     T('m03.1', 'Пять агрегатов', "Для таблицы product посчитайте: число товаров, сумму остатков, среднюю цену, минимальную и максимальную цену.",
       "SELECT COUNT(*), SUM(stock), AVG(price), MIN(price), MAX(price) FROM product;", lecture=4),
     T('m03.2', 'Три COUNT', "По таблице orders: всего заказов, заказов с назначенным курьером (courier_id не NULL), число разных покупателей.",
@@ -238,34 +120,7 @@ GROUP BY month ORDER BY month;""", db='market', ordered=True, level=2,
 FROM orders;""", db='market', level=2, hints=["COUNT(*) FILTER (WHERE ...) или SUM(CASE WHEN ... THEN 1 ELSE 0 END)"]),
 ])
 
-M4 = dict(id='m04', title='4. JOIN: соединяем таблицы', theory=r"""
-# JOIN
-
-`JOIN ... ON условие` соединяет пары строк, для которых условие истинно.
-
-| Тип | Что остаётся |
-|---|---|
-| INNER JOIN | только совпавшие пары |
-| LEFT JOIN | все строки слева; справа NULL, если пары нет |
-| RIGHT JOIN | все строки справа (переписывается в LEFT, поменяв таблицы) |
-| FULL JOIN | все строки с обеих сторон |
-| CROSS JOIN | все сочетания (декартово произведение) |
-
-## Ловушки
-
-1. **Условие на правую таблицу в WHERE убивает LEFT JOIN**: строки с NULL справа отфильтруются. Хотите «всех клиентов и только оплаченные заказы» — условие в `ON ... AND o.status = 'PAID'`.
-2. **COUNT после LEFT JOIN**: `COUNT(*)` даст 1 клиенту без заказов, нужен `COUNT(o.order_id)`.
-3. **Размножение строк**: JOIN «один-ко-многим» повторяет строку родителя. SUM по полю родителя после такого JOIN раздувается — агрегируйте детей до JOIN.
-4. **Anti-join** — «у кого нет»: `LEFT JOIN ... WHERE right.id IS NULL` или `NOT EXISTS`.
-
-## Self-join
-
-Таблица соединяется сама с собой под разными алиасами: сотрудник и его руководитель.
-```sql
-SELECT e.full_name AS employee, m.full_name AS manager
-FROM employee e LEFT JOIN employee m ON m.employee_id = e.manager_id;
-```
-""", tasks=[
+M4 = dict(id='m04', title='4. JOIN: соединяем таблицы', tasks=[
     T('m04.1', 'Заказы и имена', "full_name клиента, order_id, status для всех заказов; по order_id.",
       "SELECT c.full_name, o.order_id, o.status FROM customer c JOIN orders o ON o.customer_id = c.customer_id ORDER BY o.order_id;",
       ordered=True, lecture=4),
@@ -318,31 +173,7 @@ GROUP BY root_category ORDER BY revenue DESC;""", db='market', ordered=True, lev
       "SELECT COUNT(*) FROM customer CROSS JOIN orders;", lecture=4),
 ])
 
-M5 = dict(id='m05', title='5. Подзапросы, IN, EXISTS', theory=r"""
-# Подзапросы
-
-- **Скалярный** — одно значение: `WHERE price > (SELECT AVG(price) FROM product)`. Вернул 0 строк → NULL, больше одной → ошибка.
-- **Набор** — для `IN (SELECT ...)`.
-- **EXISTS (SELECT 1 ...)** — есть ли хотя бы одна подходящая строка; что выбрано внутри, не важно.
-- **Коррелированный** — ссылается на внешний запрос (`WHERE o.customer_id = c.customer_id`) и логически выполняется для каждой внешней строки.
-- **В FROM** — промежуточная таблица с алиасом: `FROM (SELECT ...) AS x`.
-
-## Ловушка NOT IN
-
-```sql
-WHERE customer_id NOT IN (SELECT customer_id FROM blocked_list) -- список: 2, NULL
-```
-`1 <> NULL` → UNKNOWN, поэтому `NOT IN` не вернёт ни одной строки. Для «нет в списке» используйте **NOT EXISTS** или anti-join.
-
-## Что выбрать
-
-| Вопрос | Инструмент |
-|---|---|
-| дороже среднего | скалярный подзапрос |
-| есть оплаченный заказ | EXISTS / IN |
-| нет заказов | NOT EXISTS / LEFT JOIN … IS NULL |
-| многошаговый отчёт | подзапрос в FROM или CTE |
-""", tasks=[
+M5 = dict(id='m05', title='5. Подзапросы, IN, EXISTS', tasks=[
     T('m05.1', 'Дороже среднего', "Товары дороже средней цены: name, price, по убыванию цены.",
       "SELECT name, price FROM product WHERE price > (SELECT AVG(price) FROM product) ORDER BY price DESC;", ordered=True, lecture=5),
     T('m05.2', 'Отклонение от средней', "Для каждого товара: name и разница между ценой и средней ценой (delta). По product_id.",
@@ -370,48 +201,7 @@ WHERE customer_id NOT IN (SELECT customer_id FROM blocked_list) -- список:
       db='market'),
 ])
 
-M6 = dict(id='m06', title='6. CTE и рекурсия', theory=r"""
-# CTE: WITH ... AS (...)
-
-CTE — именованный промежуточный результат внутри одного запроса. Запрос читается сверху вниз: «сначала посчитаем totals, потом используем».
-
-```sql
-WITH paid AS (
-    SELECT order_id, customer_id FROM orders WHERE status = 'PAID'
-), totals AS (
-    SELECT order_id, SUM(quantity * unit_price) AS total FROM order_item GROUP BY order_id
-)
-SELECT c.full_name, t.total
-FROM paid p JOIN totals t USING (order_id) JOIN customer c USING (customer_id);
-```
-
-CTE — про читаемость, а не про скорость: PostgreSQL может встроить CTE в общий план или материализовать его. Проверяем через `EXPLAIN (ANALYZE, BUFFERS)`.
-
-# WITH RECURSIVE
-
-Стартовая часть + `UNION ALL` + рекурсивный шаг, который соединяется с уже найденными строками. Остановка — когда шаг ничего не нашёл.
-
-```sql
-WITH RECURSIVE tree AS (
-    SELECT id, name, parent_id, 0 AS depth FROM category_tree WHERE id = 2
-    UNION ALL
-    SELECT c.id, c.name, c.parent_id, t.depth + 1
-    FROM category_tree c JOIN tree t ON c.parent_id = t.id
-)
-SELECT id, name, depth FROM tree;
-```
-
-Применения: деревья категорий, оргструктура, **генерация рядов** (дни, числа) — в PostgreSQL для рядов есть `generate_series`, здесь рекурсия:
-```sql
-WITH RECURSIVE d(day) AS (
-    SELECT '2025-12-01'
-    UNION ALL
-    SELECT date(day, '+1 day') FROM d WHERE day < '2025-12-31'
-)
-SELECT day FROM d;
-```
-Защита от циклов: хранить путь посещённых id или ограничивать глубину (`WHERE depth < 20`), в PostgreSQL 14+ — `CYCLE`.
-""", tasks=[
+M6 = dict(id='m06', title='6. CTE и рекурсия', tasks=[
     T('m06.1', 'Несколько CTE', "Через CTE: имена клиентов и суммы их оплаченных (PAID) заказов — full_name, total по каждому заказу.",
       """WITH paid AS (SELECT order_id, customer_id FROM orders WHERE status = 'PAID'),
 totals AS (SELECT order_id, SUM(quantity * unit_price) AS total FROM order_item GROUP BY order_id)
@@ -459,37 +249,7 @@ GROUP BY u.channel ORDER BY avg_check DESC;""", db='market', ordered=True, level
       hints=['Сначала посчитайте сумму каждого заказа в CTE, потом усредняйте — иначе среднее будет по позициям']),
 ])
 
-M7 = dict(id='m07', title='7. Оконные функции', theory=r"""
-# Оконные функции
-
-GROUP BY сворачивает строки, окно — **добавляет** расчёт к каждой строке.
-
-```sql
-функция(...) OVER (
-    PARTITION BY ...      -- на какие группы делить (необязательно)
-    ORDER BY ...          -- порядок внутри окна
-    ROWS BETWEEN ... AND ...  -- рамка (для накопительных и скользящих)
-)
-```
-
-| Задача | Функция |
-|---|---|
-| нумерация | `ROW_NUMBER()` |
-| рейтинг с пропусками / без | `RANK()` (1,2,2,4) / `DENSE_RANK()` (1,2,2,3) |
-| предыдущее / следующее значение | `LAG(x, k, default)` / `LEAD(x)` |
-| первое / последнее в окне | `FIRST_VALUE(x)` / `LAST_VALUE(x)` (осторожно с рамкой) |
-| накопительный итог | `SUM(x) OVER (ORDER BY d ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)` |
-| скользящее среднее 7 дней | `AVG(x) OVER (ORDER BY d ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)` |
-| доля от итога | `x * 100.0 / SUM(x) OVER ()` |
-| квантили | `NTILE(4) OVER (ORDER BY x)` |
-
-## Важно
-
-- Окна вычисляются **после** WHERE/GROUP BY/HAVING. Поэтому фильтровать по `rn` можно только уровнем выше (CTE). Зато окно можно навесить на агрегат: `SUM(SUM(x)) OVER ()`.
-- `ORDER BY` внутри OVER определяет нумерацию/накопление, внешний `ORDER BY` — порядок показа.
-- Если в OVER есть ORDER BY без рамки, рамка по умолчанию — `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` (одинаковые значения ORDER BY попадут вместе). Для накопительных итогов надёжнее явно писать `ROWS`.
-- TOP-N в группе: ROW_NUMBER в CTE → `WHERE rn <= N`.
-""", tasks=[
+M7 = dict(id='m07', title='7. Оконные функции', tasks=[
     T('m07.1', 'Средняя по категории', "Для каждого товара: name, category_id, price и средняя цена его категории (avg_in_category).",
       "SELECT name, category_id, price, AVG(price) OVER (PARTITION BY category_id) AS avg_in_category FROM product;", lecture=5),
     T('m07.2', 'ROW_NUMBER', "Пронумеруйте товары внутри категории от дорогих к дешёвым (при равенстве — по product_id): category_id, name, price, rn. Сортировка по category_id, rn.",
@@ -558,30 +318,7 @@ SELECT quartile, COUNT(*) AS users, MIN(spent) AS min_spent, MAX(spent) AS max_s
 SELECT user_id, name FROM x WHERE rn = 1 ORDER BY user_id;""", db='market', ordered=True, level=2),
 ])
 
-M8 = dict(id='m08', title='8. DML и транзакции', theory=r"""
-# DML: меняем данные
-
-```sql
-INSERT INTO customer (full_name, email) VALUES ('Ирина', 'irina@shop.ru') RETURNING customer_id;
-INSERT INTO newsletter_subscriber (email) SELECT email FROM customer WHERE ...;   -- INSERT ... SELECT
-UPDATE product SET price = price * 1.1 WHERE category_id = 2;                   -- без WHERE — вся таблица!
-DELETE FROM orders WHERE status = 'CANCELLED';                                    -- позиции уйдут по ON DELETE CASCADE
-```
-
-**UPSERT** (PostgreSQL и SQLite):
-```sql
-INSERT INTO customer (full_name, email, city) VALUES ('Анна', 'anna@shop.ru', 'Самара')
-ON CONFLICT (email) DO UPDATE SET city = excluded.city;
-```
-
-## Транзакции
-
-`BEGIN; ... COMMIT;` — всё или ничего. `ROLLBACK` отменяет. Оформление заказа — классическая транзакция: заказ + позиции + списание остатка. Если одна часть упала, не должно остаться «половины заказа».
-
-Хорошая привычка: сначала `SELECT` с тем же WHERE, потом `UPDATE`/`DELETE`.
-
-**В заданиях этого модуля** каждое выполнение идёт на свежей копии базы, так что ломать не страшно. Проверка запускает ваш скрипт, а затем проверочный SELECT.
-""", tasks=[
+M8 = dict(id='m08', title='8. DML и транзакции', tasks=[
     T('m08.1', 'INSERT', "Добавьте клиента: id 5, 'Ирина', 'irina@shop.ru', город 'Самара'.",
       "INSERT INTO customer (customer_id, full_name, email, city) VALUES (5, 'Ирина', 'irina@shop.ru', 'Самара');",
       kind='dml', check='SELECT customer_id, full_name, email, city FROM customer ORDER BY customer_id', lecture=4),
@@ -612,48 +349,7 @@ COMMIT;""", kind='dml', level=3,
       kind='dml', check='SELECT customer_id, full_name, email, city FROM customer ORDER BY customer_id', level=2),
 ])
 
-M9 = dict(id='m09', title='9. DDL, ограничения, миграции', theory=r"""
-# DDL и ограничения
-
-Порядок проектирования: требования → сущности → атрибуты → ключи → связи → обязательность → типы. Таблицы создаются от родителей к детям.
-
-| Ограничение | Смысл |
-|---|---|
-| PRIMARY KEY | «кто это?» — уникально и не NULL |
-| UNIQUE | не повторяется (email, sku) |
-| NOT NULL | обязательно |
-| CHECK | значение проходит бизнес-правило |
-| FOREIGN KEY | ссылка существует; ON DELETE RESTRICT / CASCADE / SET NULL |
-| DEFAULT | значение, если столбец не указан |
-
-Ограничения работают при INSERT **и** UPDATE, для сайта, импорта и ручного SQL одинаково.
-
-## PostgreSQL vs SQLite в DDL
-
-| PostgreSQL | В тренажёре (SQLite) |
-|---|---|
-| `bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY` | `INTEGER PRIMARY KEY` (автонумерация) |
-| `numeric(10,2)`, `timestamptz`, `boolean` | `NUMERIC`, `TEXT`, `INTEGER` 0/1 |
-| `ALTER TABLE t ALTER COLUMN c SET NOT NULL` | нет — пересоздание таблицы |
-| `ALTER TABLE t ADD CONSTRAINT uq UNIQUE (c)` | `CREATE UNIQUE INDEX uq ON t(c)` |
-| `ALTER TABLE ... DROP CONSTRAINT` | нет |
-| `ADD COLUMN`, `RENAME COLUMN`, `DROP COLUMN` | есть |
-
-## Миграция add → fill → constrain (PostgreSQL)
-
-```sql
-BEGIN;
-ALTER TABLE product ADD COLUMN sku text;                       -- 1. nullable столбец
-UPDATE product SET sku = 'SKU-' || product_id WHERE sku IS NULL; -- 2. заполнить старые строки
-ALTER TABLE product ALTER COLUMN sku SET NOT NULL;               -- 3. ужесточить
-ALTER TABLE product ADD CONSTRAINT uq_product_sku UNIQUE (sku);
-COMMIT;
-```
-
-Перенос столбца в другую таблицу: создать новое место → скопировать → проверить → только потом удалить старое.
-
-**Проверка в этом модуле**: после вашего скрипта тренажёр пробует вставлять правильные и неправильные строки — неправильные должны отклоняться ограничениями.
-""", tasks=[
+M9 = dict(id='m09', title='9. DDL, ограничения, миграции', tasks=[
     T('m09.1', 'Таблица promo_code', """
 Создайте таблицу `promo_code`: promo_code_id — первичный ключ (автонумерация), code — текст, обязательный и уникальный,
 discount_percent — целое, обязательное, от 1 до 90, active — целое, обязательное, по умолчанию 1.
@@ -728,44 +424,7 @@ created_at — обязательный текст, по умолчанию CURR
       check='SELECT product_id, customer_id, rating FROM review ORDER BY review_id'),
 ])
 
-M10 = dict(id='m10', title='10. VIEW, триггеры, JSON, индексы', theory=r"""
-# Представления
-
-- **VIEW** — сохранённый SELECT. Всегда свежие данные, само по себе не ускоряет. `CREATE OR REPLACE VIEW` (PostgreSQL), в SQLite — `DROP VIEW` + `CREATE VIEW`.
-- **MATERIALIZED VIEW** (PostgreSQL) — сохранённый результат, нужен `REFRESH MATERIALIZED VIEW` (CONCURRENTLY — с UNIQUE-индексом). В SQLite нет: аналог — таблица `CREATE TABLE ... AS SELECT`.
-
-# Триггеры
-
-PostgreSQL: триггерная функция (`RETURNS trigger`, `OLD`/`NEW`, `RETURN NEW`) + `CREATE TRIGGER ... AFTER UPDATE OF price ON product FOR EACH ROW WHEN (OLD.price IS DISTINCT FROM NEW.price) EXECUTE FUNCTION f();`
-
-SQLite пишет тело прямо в триггере:
-```sql
-CREATE TRIGGER trg_price_audit
-AFTER UPDATE OF price ON product
-FOR EACH ROW WHEN OLD.price IS NOT NEW.price          -- аналог IS DISTINCT FROM
-BEGIN
-    INSERT INTO price_audit (product_id, old_price, new_price)
-    VALUES (OLD.product_id, OLD.price, NEW.price);
-END;
-```
-Аналог `RAISE EXCEPTION` — `SELECT RAISE(ABORT, 'текст')` внутри BEFORE-триггера. BEFORE в SQLite не может менять NEW (в PostgreSQL может — так делают `updated_at`).
-
-# JSON
-
-| PostgreSQL (jsonb) | SQLite |
-|---|---|
-| `attributes ->> 'color'` | `attributes ->> 'color'` или `json_extract(attributes, '$.color')` |
-| `attributes @> '{"wireless":true}'` | `json_extract(attributes, '$.wireless') = 1` |
-| `attributes ? 'ports'` | `json_type(attributes, '$.ports') IS NOT NULL` |
-| `jsonb_array_elements_text(attributes -> 'ports')` | `json_each(attributes, '$.ports')` |
-| `jsonb_set(...)` | `json_set(attributes, '$.ram_gb', 32)` |
-
-# Индексы
-
-B-tree — `=`, диапазоны, ORDER BY; составной `(a, b)` хорошо работает для фильтра по `a` и `a + b`. Частичный — `WHERE status = 'NEW'`. По выражению — `ON product (lower(name))`. GIN (PostgreSQL) — JSONB, массивы, полнотекст; GiST — диапазоны и геометрия; BRIN — огромные журналы по времени. Каждый индекс замедляет запись.
-
-План запроса: в PostgreSQL `EXPLAIN (ANALYZE, BUFFERS) SELECT ...`, здесь — `EXPLAIN QUERY PLAN SELECT ...` (ищите `USING INDEX` vs `SCAN`).
-""", tasks=[
+M10 = dict(id='m10', title='10. VIEW, триггеры, JSON, индексы', tasks=[
     T('m10.1', 'VIEW', """
 Создайте представление `v_order_details` со столбцами: order_id, full_name, product_name, quantity,
 amount (quantity × unit_price) — по всем позициям всех заказов.
